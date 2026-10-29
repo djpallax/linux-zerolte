@@ -41,6 +41,8 @@
 #define MIN_ROLLOVER_SECS	(40ULL * 365 * 24 * 3600)
 
 static u32 arch_timer_rate __ro_after_init;
+/* Zerolte firmware can leave different CNTVOFF values on secondary CPUs. */
+static bool zerolte_phys_counter __ro_after_init;
 static int arch_timer_ppi[ARCH_TIMER_MAX_TIMER_PPI] __ro_after_init;
 
 static const char *arch_timer_ppi_names[ARCH_TIMER_MAX_TIMER_PPI] = {
@@ -799,7 +801,7 @@ static void arch_counter_set_user_access(void)
 	 */
 	if (arch_timer_this_cpu_has_cntvct_wa())
 		pr_info("CPU%d: Trapping CNTVCT access\n", smp_processor_id());
-	else
+	else if (!zerolte_phys_counter)
 		cntkctl |= ARCH_TIMER_USR_VCT_ACCESS_EN;
 
 	arch_timer_set_cntkctl(cntkctl);
@@ -912,9 +914,10 @@ static void __init arch_counter_register(void)
 	u64 start_count;
 	int width;
 
-	if ((IS_ENABLED(CONFIG_ARM64) && !is_hyp_mode_available()) ||
-	    arch_timer_uses_ppi == ARCH_TIMER_VIRT_PPI ||
-	    arch_timer_uses_ppi == ARCH_TIMER_HYP_VIRT_PPI) {
+	if (!zerolte_phys_counter &&
+	    ((IS_ENABLED(CONFIG_ARM64) && !is_hyp_mode_available()) ||
+	     arch_timer_uses_ppi == ARCH_TIMER_VIRT_PPI ||
+	     arch_timer_uses_ppi == ARCH_TIMER_HYP_VIRT_PPI)) {
 		if (arch_timer_counter_has_wa()) {
 			rd = arch_counter_get_cntvct_stable;
 			scr = raw_counter_get_cntvct_stable;
@@ -933,6 +936,8 @@ static void __init arch_counter_register(void)
 	}
 
 	arch_timer_read_counter = rd;
+	if (zerolte_phys_counter)
+		pr_info("physical system counter; VDSO direct counter disabled\n");
 	clocksource_counter.vdso_clock_mode = vdso_default;
 
 	width = arch_counter_get_width();
@@ -1171,6 +1176,11 @@ static int __init arch_timer_of_init(struct device_node *np)
 		return 0;
 	}
 
+	if (of_machine_is_compatible("samsung,exynos7420-zerolte") &&
+	    of_property_read_bool(np, "samsung,zerolte-physical-counter")) {
+		zerolte_phys_counter = true;
+		vdso_default = VDSO_CLOCKMODE_NONE;
+	}
 	has_names = of_property_present(np, "interrupt-names");
 
 	for (i = ARCH_TIMER_PHYS_SECURE_PPI; i < ARCH_TIMER_MAX_TIMER_PPI; i++) {
@@ -1196,9 +1206,10 @@ static int __init arch_timer_of_init(struct device_node *np)
 	 * If we cannot rely on firmware initializing the timer registers then
 	 * we should use the physical timers instead.
 	 */
-	if (IS_ENABLED(CONFIG_ARM) &&
-	    of_property_read_bool(np, "arm,cpu-registers-not-fw-configured"))
-		arch_timer_uses_ppi = ARCH_TIMER_PHYS_SECURE_PPI;
+	if (of_property_read_bool(np, "arm,cpu-registers-not-fw-configured"))
+		arch_timer_uses_ppi = IS_ENABLED(CONFIG_ARM64) ?
+					      ARCH_TIMER_PHYS_NONSECURE_PPI :
+					      ARCH_TIMER_PHYS_SECURE_PPI;
 	else
 		arch_timer_uses_ppi = arch_timer_select_ppi();
 

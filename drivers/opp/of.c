@@ -1307,6 +1307,11 @@ int dev_pm_opp_of_get_sharing_cpus(struct device *cpu_dev,
 			_opp_of_get_opp_desc_node(cpu_np, 0);
 
 		if (!tmp_np) {
+			/* Zerolte: APOLLO OPPs are shared; ATLAS is intentionally unmanaged. */
+			if (of_machine_is_compatible(
+				    "samsung,exynos7420-zerolte") &&
+			    of_device_is_compatible(cpu_np, "arm,cortex-a57"))
+				continue;
 			pr_err("%pOF: Couldn't find opp node\n", cpu_np);
 			return -ENOENT;
 		}

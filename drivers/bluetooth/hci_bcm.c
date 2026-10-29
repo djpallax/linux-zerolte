@@ -1569,6 +1569,11 @@ static struct bcm_device_data bcm4354_device_data = {
 	.no_early_set_baudrate = true,
 };
 
+/* Reset before changing the vendor baud rate, matching BCM4354 ordering. */
+static struct bcm_device_data bcm4358_device_data = {
+	.no_early_set_baudrate = true,
+};
+
 static struct bcm_device_data bcm43438_device_data = {
 	.drive_rts_on_open = true,
 };
@@ -1593,6 +1598,8 @@ static const struct of_device_id bcm_bluetooth_of_match[] = {
 	{ .compatible = "brcm,bcm4349-bt", .data = &bcm43438_device_data },
 	{ .compatible = "brcm,bcm43540-bt", .data = &bcm4354_device_data },
 	{ .compatible = "brcm,bcm4335a0" },
+	/* BCM4358 uses the generic Broadcom H4 setup at 115200 baud. */
+	{ .compatible = "brcm,bcm4358-bt", .data = &bcm4358_device_data },
 	{ .compatible = "cypress,cyw4373a0-bt", .data = &cyw4373a0_device_data },
 	{ .compatible = "infineon,cyw55572-bt", .data = &cyw55572_device_data },
 	{ },

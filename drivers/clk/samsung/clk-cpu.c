@@ -32,6 +32,7 @@
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
@@ -617,7 +618,94 @@ static int exynos_cpuclk_notifier_cb(struct notifier_block *nb,
 	return notifier_from_errno(err);
 }
 
+/* IRQ-disabled waits must not depend on jiffies on a single-core boot. */
+static int s6_mux_wait(struct exynos_cpuclk *c, u32 expected)
+{
+	u32 v;
+
+	return readl_poll_timeout_atomic(c->base + 0x408, v,
+					 (v & 7) == expected, 1, 10000);
+}
+static int s6_div_wait(struct exynos_cpuclk *c, u32 offset, u32 mask)
+{
+	u32 v;
+
+	return readl_poll_timeout_atomic(c->base + offset, v, !(v & mask), 1,
+					 10000);
+}
+static int s6_safe_div(struct exynos_cpuclk *c, u32 div)
+{
+	u32 v = readl(c->base + 0x600);
+
+	writel((v & ~7) | (div & 7), c->base + 0x600);
+	return s6_div_wait(c, 0x700, 7);
+}
+static int s6_pre_rate(struct clk_notifier_data *n, struct exynos_cpuclk *c)
+{
+	const struct exynos_cpuclk_cfg_data *cfg = c->cfg;
+	unsigned long alt = clk_hw_get_rate(c->alt_parent), flags, div = 0;
+	u32 v;
+	int ret = 0;
+
+	while (cfg->prate * 1000 != n->new_rate) {
+		if (!cfg->prate)
+			return -EINVAL;
+		cfg++;
+	}
+	if (!alt)
+		return -EINVAL;
+	spin_lock_irqsave(c->lock, flags);
+	if (alt > n->old_rate || n->old_rate > n->new_rate) {
+		div = DIV_ROUND_UP(alt, min(n->old_rate, n->new_rate)) - 1;
+		if (div >= 8) {
+			ret = -ERANGE;
+			goto out;
+		}
+		ret = s6_safe_div(c, div);
+		if (ret)
+			goto out;
+	}
+	v = readl(c->base + 0x208);
+	writel(v | 1, c->base + 0x208);
+	ret = s6_mux_wait(c, 1);
+	if (ret)
+		goto out;
+	writel(cfg->div0 | div, c->base + 0x600);
+	ret = s6_div_wait(c, 0x700, 0x15111111);
+	if (ret)
+		goto out;
+	writel(cfg->div1, c->base + 0x604);
+	ret = s6_div_wait(c, 0x704, 0x11111111);
+out:
+	spin_unlock_irqrestore(c->lock, flags);
+	if (ret)
+		pr_err("CPU pre-rate transition failed:%d\n", ret);
+	return ret;
+}
+static int s6_post_rate(struct clk_notifier_data *n, struct exynos_cpuclk *c)
+{
+	unsigned long flags;
+	u32 v;
+	int ret;
+
+	spin_lock_irqsave(c->lock, flags);
+	v = readl(c->base + 0x208);
+	writel(v & ~1, c->base + 0x208);
+	ret = s6_mux_wait(c, 0);
+	if (!ret)
+		ret = s6_safe_div(c, 0);
+	spin_unlock_irqrestore(c->lock, flags);
+	if (ret)
+		pr_err("CPU post-rate transition failed:%d\n", ret);
+	return ret;
+}
+
 static const struct exynos_cpuclk_chip exynos_clkcpu_chips[] = {
+	[CPUCLK_LAYOUT_E7420] = {
+		.regs = &e5433_cpuclk_regs,
+		.pre_rate_cb = s6_pre_rate,
+		.post_rate_cb = s6_post_rate,
+	},
 	[CPUCLK_LAYOUT_E4210] = {
 		.regs		= &e4210_cpuclk_regs,
 		.pre_rate_cb	= exynos_cpuclk_pre_rate_change,

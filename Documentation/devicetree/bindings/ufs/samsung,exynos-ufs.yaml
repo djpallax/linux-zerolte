@@ -17,6 +17,7 @@ properties:
     enum:
       - google,gs101-ufs
       - samsung,exynos7-ufs
+      - samsung,exynos7420-ufs
       - samsung,exynosautov9-ufs
       - samsung,exynosautov9-ufs-vh
       - samsung,exynosautov920-ufs

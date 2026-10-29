@@ -125,6 +125,7 @@ struct exynos_adc {
 struct exynos_adc_data {
 	int num_channels;
 	bool needs_sclk;
+	bool no_vdd; /* Exynos7420 OEM DT has no controllable ADC supply. */
 	bool needs_adc_phy;
 	int phy_offset;
 	u32 mask;
@@ -387,6 +388,25 @@ static void exynos_adc_exynos7_init_hw(struct exynos_adc *info)
 	writel(1, ADC_V2_INT_EN(info->regs));
 }
 
+/* Exynos7420 Samsung driver: no ADC PHY control and no vdd consumer. */
+static void exynos_adc_exynos7420_init_hw(struct exynos_adc *info)
+{
+	writel(ADC_V2_CON1_SOFT_RESET, ADC_V2_CON1(info->regs));
+	writel(ADC_V2_CON2_OSEL | ADC_V2_CON2_ESEL | ADC_V2_CON2_HIGHF |
+		       ADC_V2_CON2_C_TIME(6),
+	       ADC_V2_CON2(info->regs));
+	writel(1, ADC_V2_INT_EN(info->regs));
+}
+static const struct exynos_adc_data exynos7420_adc_data = {
+	.num_channels = MAX_ADC_V2_CHANNELS,
+	.no_vdd = true,
+	.mask = ADC_DATX_MASK,
+	.init_hw = exynos_adc_exynos7420_init_hw,
+	.exit_hw = exynos_adc_v2_exit_hw,
+	.clear_irq = exynos_adc_v2_clear_irq,
+	.start_conv = exynos_adc_v2_start_conv,
+};
+
 static const struct exynos_adc_data exynos7_adc_data = {
 	.num_channels	= MAX_ADC_V1_CHANNELS,
 	.mask		= ADC_DATX_MASK, /* 12 bit ADC resolution */
@@ -416,7 +436,12 @@ static const struct of_device_id exynos_adc_match[] = {
 	}, {
 		.compatible = "samsung,exynos3250-adc",
 		.data = &exynos3250_adc_data,
-	}, {
+	},
+	{
+		.compatible = "samsung,exynos7420-adc",
+		.data = &exynos7420_adc_data,
+	},
+	{
 		.compatible = "samsung,exynos7-adc",
 		.data = &exynos7_adc_data,
 	},
@@ -443,6 +468,8 @@ static int exynos_read_raw(struct iio_dev *indio_dev,
 	int ret;
 
 	if (mask == IIO_CHAN_INFO_SCALE) {
+		if (!info->vdd)
+			return -EOPNOTSUPP;
 		ret = regulator_get_voltage(info->vdd);
 		if (ret < 0)
 			return ret;
@@ -590,13 +617,16 @@ static int exynos_adc_probe(struct platform_device *pdev)
 					     "failed getting sclk clock\n");
 	}
 
-	info->vdd = devm_regulator_get(dev, "vdd");
-	if (IS_ERR(info->vdd))
-		return dev_err_probe(dev, PTR_ERR(info->vdd), "failed getting regulator");
+	if (!info->data->no_vdd) {
+		info->vdd = devm_regulator_get(dev, "vdd");
+		if (IS_ERR(info->vdd))
+			return dev_err_probe(dev, PTR_ERR(info->vdd),
+					     "failed getting regulator");
 
-	ret = regulator_enable(info->vdd);
-	if (ret)
-		return ret;
+		ret = info->vdd ? regulator_enable(info->vdd) : 0;
+		if (ret)
+			return ret;
+	}
 
 	ret = exynos_adc_prepare_clk(info);
 	if (ret)
@@ -649,7 +679,8 @@ err_disable_clk:
 err_unprepare_clk:
 	exynos_adc_unprepare_clk(info);
 err_disable_reg:
-	regulator_disable(info->vdd);
+	if (info->vdd)
+		regulator_disable(info->vdd);
 	return ret;
 }
 
@@ -665,7 +696,8 @@ static void exynos_adc_remove(struct platform_device *pdev)
 		info->data->exit_hw(info);
 	exynos_adc_disable_clk(info);
 	exynos_adc_unprepare_clk(info);
-	regulator_disable(info->vdd);
+	if (info->vdd)
+		regulator_disable(info->vdd);
 }
 
 static int exynos_adc_suspend(struct device *dev)
@@ -676,7 +708,8 @@ static int exynos_adc_suspend(struct device *dev)
 	if (info->data->exit_hw)
 		info->data->exit_hw(info);
 	exynos_adc_disable_clk(info);
-	regulator_disable(info->vdd);
+	if (info->vdd)
+		regulator_disable(info->vdd);
 
 	return 0;
 }
@@ -687,7 +720,7 @@ static int exynos_adc_resume(struct device *dev)
 	struct exynos_adc *info = iio_priv(indio_dev);
 	int ret;
 
-	ret = regulator_enable(info->vdd);
+	ret = info->vdd ? regulator_enable(info->vdd) : 0;
 	if (ret)
 		return ret;
 

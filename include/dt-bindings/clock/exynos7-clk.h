@@ -156,7 +156,7 @@
 #define DOUT_PCLK_FSYS1			13
 #define PCLK_GPIO_FSYS1			14
 #define MOUT_FSYS1_PHYCLK_SEL1		15
-#define FSYS1_NR_CLK			16
+#define FSYS1_NR_CLK 32
 
 /* MSCL */
 #define USERMUX_ACLK_MSCL_532		1
@@ -200,5 +200,8 @@
 #define PCLK_I2S			3
 #define PCLK_PCM			4
 #define ACLK_ADMA			5
-#define AUD_NR_CLK			6
+#define SCLK_UART_AUD 6
+#define PCLK_UART_AUD 7
+#define PCLK_GPIO_AUD 8
+#define AUD_NR_CLK 9
 #endif /* _DT_BINDINGS_CLOCK_EXYNOS7_H */

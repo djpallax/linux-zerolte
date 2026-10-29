@@ -2800,3 +2800,12 @@ config SENSORS_HP_WMI
 endif # ACPI
 
 endif # HWMON
+
+config S6_TMU_OBSERVE
+	bool "Zerolte TMU monitoring and CPU thermal protection"
+	depends on OF && ARCH_EXYNOS && HWMON
+	help
+	  Monitor firmware-initialized temperature sensors on the Galaxy S6 Edge
+	  without changing the TMU calibration or control registers.
+	  Limit CPU frequency and park secondary CPUs above the passive trip.
+	  Invalid samples fail closed; the critical trip requests recovery.

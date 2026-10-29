@@ -16,3 +16,12 @@ config DRM_PANFROST
 	help
 	  DRM driver for ARM Mali Midgard (T6xx, T7xx, T8xx) and
 	  Bifrost (G3x, G5x, G7x) GPUs.
+
+config S6_G3D_PILOT
+	bool "Zerolte measured G3D clock and GPIO supply pilot"
+	depends on DRM_PANFROST && ARCH_EXYNOS && I2C && GPIOLIB && REGULATOR
+	help
+	  Enable the board-specific Mali-T760 clock and supply provider for
+	  the Galaxy S6 Edge. It verifies the inherited supply calibration
+	  and uses a fixed 266 MHz operating point with bounded power-on waits.
+	  GPU DVFS, runtime power-off and suspend are not supported.

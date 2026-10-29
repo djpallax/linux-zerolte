@@ -14,6 +14,7 @@
 #include <linux/mfd/max77693-common.h>
 #include <linux/mfd/max77843-private.h>
 #include <linux/platform_device.h>
+#include <linux/of.h>
 
 static const struct mfd_cell max77843_devs[] = {
 	{
@@ -96,6 +97,10 @@ static int max77843_probe(struct i2c_client *i2c)
 	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	struct max77693_dev *max77843;
 	unsigned int reg_data;
+	bool staged_irqs =
+		of_machine_is_compatible("samsung,exynos7420-zerolte") &&
+		of_property_read_bool(i2c->dev.of_node,
+				      "samsung,zerolte-staged-irqs");
 	int ret;
 
 	max77843 = devm_kzalloc(&i2c->dev, sizeof(*max77843), GFP_KERNEL);
@@ -113,6 +118,18 @@ static int max77843_probe(struct i2c_client *i2c)
 	if (IS_ERR(max77843->regmap)) {
 		dev_err(&i2c->dev, "Failed to allocate topsys register map\n");
 		return PTR_ERR(max77843->regmap);
+	}
+
+	/* Keep firmware-pending sources quiet until their handlers are ready. */
+	if (staged_irqs) {
+		ret = regmap_update_bits(max77843->regmap,
+					 MAX77843_SYS_REG_INTSRCMASK,
+					 MAX77843_INTSRC_MASK_MASK,
+					 MAX77843_INTSRC_MASK_MASK);
+		if (ret)
+			return ret;
+		dev_dbg(&i2c->dev,
+			"top-level sources masked before IRQ registration\n");
 	}
 
 	ret = regmap_add_irq_chip(max77843->regmap, max77843->irq,
@@ -137,13 +154,25 @@ static int max77843_probe(struct i2c_client *i2c)
 		goto err_pmic_id;
 	}
 
-	ret = regmap_update_bits(max77843->regmap,
-				 MAX77843_SYS_REG_INTSRCMASK,
-				 MAX77843_INTSRC_MASK_MASK,
-				 (unsigned int)~MAX77843_INTSRC_MASK_MASK);
+	ret = regmap_update_bits(
+		max77843->regmap, MAX77843_SYS_REG_INTSRCMASK,
+		MAX77843_INTSRC_MASK_MASK,
+		staged_irqs ? (MAX77843_INTSRCMASK_CHGR_MASK |
+			       MAX77843_INTSRCMASK_FG_MASK |
+			       MAX77843_INTSRCMASK_MUIC_MASK) :
+			      (unsigned int)~MAX77843_INTSRC_MASK_MASK);
 	if (ret < 0) {
 		dev_err(&i2c->dev, "Failed to unmask interrupt source\n");
 		goto err_pmic_id;
+	}
+
+	if (staged_irqs) {
+		ret = regmap_read(max77843->regmap, MAX77843_SYS_REG_INTSRCMASK,
+				  &reg_data);
+		if (ret)
+			goto err_pmic_id;
+		dev_dbg(&i2c->dev, "source mask before children=0x%02x\n",
+			reg_data);
 	}
 
 	ret = mfd_add_devices(max77843->dev, -1, max77843_devs,

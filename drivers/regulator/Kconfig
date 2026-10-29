@@ -1890,3 +1890,13 @@ config REGULATOR_QCOM_LABIBB
 	  for LCD display panel.
 
 endif
+
+config REGULATOR_S6_TSP_AVDD
+	bool "Zerolte S2MPB02 LDO17 enable-only pilot"
+	depends on I2C && OF && REGULATOR
+	select REGMAP_I2C
+	help
+	  Provide the touchscreen analog supply on the Samsung Galaxy S6 Edge.
+	  Require the inherited LDO17 voltage selector to match 3.3 V before
+	  exposing the supply. Only its enable bit may be changed.
+	  Other regulator outputs and voltage selectors are left untouched.

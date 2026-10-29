@@ -61,3 +61,5 @@ obj-$(CONFIG_ARM64) += pcie-hisi.o
 obj-$(CONFIG_ARM64) += pcie-tegra194-acpi.o
 endif
 endif
+
+obj-$(CONFIG_PCI_EXYNOS) += pci-zerolte.o

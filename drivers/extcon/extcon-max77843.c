@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/workqueue.h>
+#include <linux/of.h>
 
 #define DELAY_MS_DEFAULT		15000	/* unit: millisecond */
 
@@ -771,7 +772,7 @@ static int max77843_muic_set_debounce_time(struct max77843_muic_info *info,
 
 static int max77843_init_muic_regmap(struct max77693_dev *max77843)
 {
-	int ret;
+	int ret, i;
 
 	max77843->i2c_muic = i2c_new_dummy_device(max77843->i2c->adapter,
 			I2C_ADDR_MUIC);
@@ -790,6 +791,17 @@ static int max77843_init_muic_regmap(struct max77693_dev *max77843)
 		goto err_muic_i2c;
 	}
 
+	if (of_machine_is_compatible("samsung,exynos7420-zerolte") &&
+	    of_property_read_bool(max77843->dev->of_node,
+				  "samsung,zerolte-staged-irqs")) {
+		/* MUIC masks have inverse polarity: zero masks the whole group. */
+		for (i = 0; i < 3; i++) {
+			ret = regmap_write(max77843->regmap_muic,
+					   MAX77843_MUIC_REG_INTMASK1 + i, 0);
+			if (ret)
+				goto err_muic_i2c;
+		}
+	}
 	ret = regmap_add_irq_chip(max77843->regmap_muic, max77843->irq,
 			IRQF_TRIGGER_LOW | IRQF_ONESHOT | IRQF_SHARED,
 			0, &max77843_muic_irq_chip, &max77843->irq_data_muic);
@@ -914,6 +926,22 @@ static int max77843_muic_probe(struct platform_device *pdev)
 		}
 	}
 
+	if (of_machine_is_compatible("samsung,exynos7420-zerolte") &&
+	    of_property_read_bool(max77843->dev->of_node,
+				  "samsung,zerolte-staged-irqs")) {
+		ret = regmap_update_bits(max77843->regmap,
+					 MAX77843_SYS_REG_INTSRCMASK,
+					 MAX77843_INTSRCMASK_MUIC_MASK, 0);
+		if (ret)
+			goto err_muic_irq;
+		ret = regmap_read(max77843->regmap, MAX77843_SYS_REG_INTSRCMASK,
+				  &id);
+		if (ret)
+			goto err_muic_irq;
+		dev_dbg(info->dev, "MUIC handlers ready; source mask=0x%02x\n",
+			id);
+	}
+
 	/* Detect accessory after completing the initialization of platform */
 	INIT_DELAYED_WORK(&info->wq_detcable, max77843_muic_detect_cable_wq);
 	queue_delayed_work(system_power_efficient_wq,
@@ -922,6 +950,13 @@ static int max77843_muic_probe(struct platform_device *pdev)
 	return 0;
 
 err_muic_irq:
+	if (of_machine_is_compatible("samsung,exynos7420-zerolte") &&
+	    of_property_read_bool(max77843->dev->of_node,
+				  "samsung,zerolte-staged-irqs"))
+		regmap_update_bits(max77843->regmap,
+				   MAX77843_SYS_REG_INTSRCMASK,
+				   MAX77843_INTSRCMASK_MUIC_MASK,
+				   MAX77843_INTSRCMASK_MUIC_MASK);
 	regmap_del_irq_chip(max77843->irq, max77843->irq_data_muic);
 	i2c_unregister_device(max77843->i2c_muic);
 
@@ -933,6 +968,13 @@ static void max77843_muic_remove(struct platform_device *pdev)
 	struct max77843_muic_info *info = platform_get_drvdata(pdev);
 	struct max77693_dev *max77843 = info->max77843;
 
+	if (of_machine_is_compatible("samsung,exynos7420-zerolte") &&
+	    of_property_read_bool(max77843->dev->of_node,
+				  "samsung,zerolte-staged-irqs"))
+		regmap_update_bits(max77843->regmap,
+				   MAX77843_SYS_REG_INTSRCMASK,
+				   MAX77843_INTSRCMASK_MUIC_MASK,
+				   MAX77843_INTSRCMASK_MUIC_MASK);
 	cancel_work_sync(&info->irq_work);
 	regmap_del_irq_chip(max77843->irq, max77843->irq_data_muic);
 	i2c_unregister_device(max77843->i2c_muic);

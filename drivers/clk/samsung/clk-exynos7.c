@@ -198,9 +198,20 @@ static const struct samsung_cmu_info topc_cmu_info __initconst = {
 	.nr_clk_regs		= ARRAY_SIZE(topc_clk_regs),
 };
 
+PNAME(s6_bus_apollo_p) = { "mout_topc_bus0_pll", "ffac_topc_bus0_pll_div2",
+			   "mout_topc_bus1_pll", "mout_topc_cc_pll" };
+static const struct samsung_mux_clock s6_topc_mux[] __initconst = {
+	MUX(0, "s6_bus_apollo", s6_bus_apollo_p, MUX_SEL_TOPC1, 8, 2),
+	MUX(0, "s6_bus_atlas", s6_bus_apollo_p, MUX_SEL_TOPC1, 4, 2)
+};
 static void __init exynos7_clk_topc_init(struct device_node *np)
 {
-	samsung_cmu_register_one(np, &topc_cmu_info);
+	struct samsung_clk_provider *ctx =
+		samsung_cmu_register_one(np, &topc_cmu_info);
+
+	if (of_machine_is_compatible("samsung,exynos7420-zerolte"))
+		samsung_clk_register_mux(ctx, s6_topc_mux,
+					 ARRAY_SIZE(s6_topc_mux));
 }
 
 CLK_OF_DECLARE(exynos7_clk_topc, "samsung,exynos7-clock-topc",
@@ -1104,9 +1115,59 @@ static const struct samsung_cmu_info fsys1_cmu_info __initconst = {
 	.nr_clk_regs		= ARRAY_SIZE(fsys1_clk_regs),
 };
 
+/* Zerolte WLAN gates, Samsung7420 layout. No divider/PLL changes. */
+PNAME(s6_wifi_ref_p) = { "fin_pll", "sclk_phy_fsys1" };
+PNAME(s6_wifi_tx_p) = { "fin_pll", "s6_wifi_phy_tx" };
+PNAME(s6_wifi_rx_p) = { "fin_pll", "s6_wifi_phy_rx" };
+static const struct samsung_fixed_rate_clock s6_wifi_fixed[] __initconst = {
+	FRATE(0, "s6_wifi_phy_tx", NULL, 0, 250000000),
+	FRATE(0, "s6_wifi_phy_rx", NULL, 0, 250000000)
+};
+static const struct samsung_mux_clock s6_wifi_muxes[] __initconst = {
+	MUX(0, "s6_wifi_ref_mux", s6_wifi_ref_p, MUX_SEL_FSYS11, 16, 1),
+	MUX(0, "s6_wifi_tx_mux", s6_wifi_tx_p, MUX_SEL_FSYS12, 12, 1),
+	MUX(0, "s6_wifi_rx_mux", s6_wifi_rx_p, MUX_SEL_FSYS12, 8, 1)
+};
+static const struct samsung_div_clock s6_wifi_divs[] __initconst = { DIV(
+	0, "s6_wifi_async_div", "mout_aclk_fsys1_200_user", DIV_FSYS1, 8, 2) };
+static const struct samsung_gate_clock s6_wifi_gates[] __initconst = {
+	GATE(16, "s6_wifi_bus", "mout_aclk_fsys1_200_user", ENABLE_ACLK_FSYS1,
+	     24, 0, 0),
+	GATE(17, "s6_wifi_ahb", "mout_aclk_fsys1_200_user", ENABLE_ACLK_FSYS1,
+	     13, 0, 0),
+	GATE(18, "s6_wifi_master", "mout_aclk_fsys1_200_user",
+	     ENABLE_ACLK_FSYS1, 12, 0, 0),
+	GATE(19, "s6_wifi_slave", "mout_aclk_fsys1_200_user", ENABLE_ACLK_FSYS1,
+	     11, 0, 0),
+	GATE(20, "s6_wifi_dbi", "mout_aclk_fsys1_200_user", ENABLE_ACLK_FSYS1,
+	     10, 0, 0),
+	GATE(21, "s6_wifi_pcs", "mout_aclk_fsys1_200_user", ENABLE_ACLK_FSYS1,
+	     9, 0, 0),
+	GATE(22, "s6_wifi_async", "s6_wifi_async_div", ENABLE_PCLK_FSYS1, 22, 0,
+	     0),
+	GATE(23, "s6_wifi_link", "fin_pll", ENABLE_SCLK_FSYS11, 0, 0, 0),
+	GATE(24, "s6_wifi_24m", "mout_fsys1_phyclk_sel0", ENABLE_SCLK_FSYS13,
+	     28, 0, 0),
+	GATE(25, "s6_wifi_ref", "s6_wifi_ref_mux", ENABLE_SCLK_FSYS11, 16, 0,
+	     0),
+	GATE(26, "s6_wifi_tx", "s6_wifi_tx_mux", ENABLE_SCLK_FSYS12, 12, 0, 0),
+	GATE(27, "s6_wifi_rx", "s6_wifi_rx_mux", ENABLE_SCLK_FSYS12, 8, 0, 0)
+};
 static void __init exynos7_clk_fsys1_init(struct device_node *np)
 {
-	samsung_cmu_register_one(np, &fsys1_cmu_info);
+	struct samsung_clk_provider *ctx =
+		samsung_cmu_register_one(np, &fsys1_cmu_info);
+
+	if (of_machine_is_compatible("samsung,exynos7420-zerolte")) {
+		samsung_clk_register_fixed_rate(ctx, s6_wifi_fixed,
+						ARRAY_SIZE(s6_wifi_fixed));
+		samsung_clk_register_mux(ctx, s6_wifi_muxes,
+					 ARRAY_SIZE(s6_wifi_muxes));
+		samsung_clk_register_div(ctx, s6_wifi_divs,
+					 ARRAY_SIZE(s6_wifi_divs));
+		samsung_clk_register_gate(ctx, s6_wifi_gates,
+					  ARRAY_SIZE(s6_wifi_gates));
+	}
 }
 
 CLK_OF_DECLARE(exynos7_clk_fsys1, "samsung,exynos7-clock-fsys1",
@@ -1267,24 +1328,26 @@ static const struct samsung_div_clock aud_div_clks[] __initconst = {
 };
 
 static const struct samsung_gate_clock aud_gate_clks[] __initconst = {
-	GATE(SCLK_PCM, "sclk_pcm", "dout_sclk_pcm",
-			ENABLE_SCLK_AUD, 27, CLK_SET_RATE_PARENT, 0),
-	GATE(SCLK_I2S, "sclk_i2s", "dout_sclk_i2s",
-			ENABLE_SCLK_AUD, 28, CLK_SET_RATE_PARENT, 0),
-	GATE(0, "sclk_uart", "dout_sclk_uart", ENABLE_SCLK_AUD, 29, 0, 0),
-	GATE(0, "sclk_slimbus", "dout_sclk_slimbus",
-			ENABLE_SCLK_AUD, 30, 0, 0),
+	GATE(SCLK_PCM, "sclk_pcm", "dout_sclk_pcm", ENABLE_SCLK_AUD, 27,
+	     CLK_SET_RATE_PARENT, 0),
+	GATE(SCLK_I2S, "sclk_i2s", "dout_sclk_i2s", ENABLE_SCLK_AUD, 28,
+	     CLK_SET_RATE_PARENT, 0),
+	GATE(SCLK_UART_AUD, "sclk_uart", "dout_sclk_uart", ENABLE_SCLK_AUD, 29,
+	     0, 0),
+	GATE(0, "sclk_slimbus", "dout_sclk_slimbus", ENABLE_SCLK_AUD, 30, 0, 0),
 
 	GATE(0, "pclk_dbg_aud", "dout_aud_pclk_dbg", ENABLE_PCLK_AUD, 19, 0, 0),
-	GATE(0, "pclk_gpio_aud", "dout_aclk_aud", ENABLE_PCLK_AUD, 20, 0, 0),
+	GATE(PCLK_GPIO_AUD, "pclk_gpio_aud", "dout_aclk_aud", ENABLE_PCLK_AUD,
+	     20, 0, 0),
 	GATE(0, "pclk_wdt1", "dout_aclk_aud", ENABLE_PCLK_AUD, 22, 0, 0),
 	GATE(0, "pclk_wdt0", "dout_aclk_aud", ENABLE_PCLK_AUD, 23, 0, 0),
 	GATE(0, "pclk_slimbus", "dout_aclk_aud", ENABLE_PCLK_AUD, 24, 0, 0),
-	GATE(0, "pclk_uart", "dout_aclk_aud", ENABLE_PCLK_AUD, 25, 0, 0),
-	GATE(PCLK_PCM, "pclk_pcm", "dout_aclk_aud",
-			ENABLE_PCLK_AUD, 26, CLK_SET_RATE_PARENT, 0),
-	GATE(PCLK_I2S, "pclk_i2s", "dout_aclk_aud",
-			ENABLE_PCLK_AUD, 27, CLK_SET_RATE_PARENT, 0),
+	GATE(PCLK_UART_AUD, "pclk_uart", "dout_aclk_aud", ENABLE_PCLK_AUD, 25,
+	     0, 0),
+	GATE(PCLK_PCM, "pclk_pcm", "dout_aclk_aud", ENABLE_PCLK_AUD, 26,
+	     CLK_SET_RATE_PARENT, 0),
+	GATE(PCLK_I2S, "pclk_i2s", "dout_aclk_aud", ENABLE_PCLK_AUD, 27,
+	     CLK_SET_RATE_PARENT, 0),
 	GATE(0, "pclk_timer", "dout_aclk_aud", ENABLE_PCLK_AUD, 28, 0, 0),
 	GATE(0, "pclk_smmu_aud", "dout_aclk_aud", ENABLE_PCLK_AUD, 31, 0, 0),
 

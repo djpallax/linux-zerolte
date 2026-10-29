@@ -12,6 +12,15 @@ menuconfig INPUT_TOUCHSCREEN
 
 if INPUT_TOUCHSCREEN
 
+config TOUCHSCREEN_S6_FTS_PILOT
+	bool "Zerolte STM FTS pilot"
+	depends on I2C && LEDS_CLASS && OF && REGULATOR
+	help
+	  Enable the STM FTS touchscreen and capacitive keys on the Galaxy
+	  S6 Edge, including its optional key backlight supply. The driver
+	  uses the firmware event protocol and verified board supply voltages.
+	  Firmware upgrades, NVM repair and suspend are not supported.
+
 config TOUCHSCREEN_88PM860X
 	tristate "Marvell 88PM860x touchscreen"
 	depends on MFD_88PM860X

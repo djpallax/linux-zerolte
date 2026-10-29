@@ -24049,6 +24049,21 @@ L:	platform-driver-x86@vger.kernel.org
 S:	Maintained
 F:	drivers/platform/x86/samsung-laptop.c
 
+SAMSUNG GALAXY S6 EDGE (ZEROLTE) EXPERIMENTAL SUPPORT
+S:	Odd Fixes
+W:	https://github.com/djpallax/linux-zerolte
+F:	ZEROLTE.md
+F:	arch/arm64/configs/zerolte_defconfig
+F:	drivers/clk/samsung/clk-zerolte-*.c
+F:	drivers/cpufreq/s6-atlas-prepare.c
+F:	drivers/gpu/drm/panfrost/s6-g3d-pilot.c
+F:	drivers/hwmon/s6_tmu_observe.c
+F:	drivers/input/touchscreen/s6-fts-pilot.c
+F:	drivers/pci/controller/dwc/pci-zerolte.c
+F:	drivers/power/supply/s6_max77843_readonly.c
+F:	drivers/regulator/s6-tsp-avdd.c
+F:	kernel/s6_bootdiag.c
+
 SAMSUNG MULTIFUNCTION PMIC DEVICE DRIVERS
 M:	André Draszik <andre.draszik@linaro.org>
 L:	linux-kernel@vger.kernel.org

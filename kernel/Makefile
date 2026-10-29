@@ -207,3 +207,6 @@ $(obj)/kheaders.md5: $(obj)/kheaders-srclist FORCE
 	$(call filechk,kheaders_md5sum)
 
 clean-files := kheaders.md5 kheaders-srclist kheaders-objlist
+
+# SM-G925I experimental pre-userspace diagnosis (DT opt-in).
+obj-y += s6_bootdiag.o

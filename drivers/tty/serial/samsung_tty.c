@@ -6,7 +6,8 @@
  *	http://armlinux.simtec.co.uk/
  */
 
-/* Note on 2410 error handling
+/*
+ * Note on 2410 error handling
  *
  * The s3c2410 manual has a love/hate affair with the contents of the
  * UERSTAT register in the UART blocks, and keeps marking some of the
@@ -32,6 +33,8 @@
 #include <linux/ioport.h>
 #include <linux/math.h>
 #include <linux/module.h>
+#include <linux/mfd/syscon.h>
+#include <linux/regmap.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/serial.h>
@@ -128,6 +131,12 @@ struct s3c24xx_uart_dma {
 	int				rx_bytes_requested;
 };
 
+/* Exynos7420 AUD UART routing, from the Samsung LPASS definitions. */
+#define EXYNOS7420_LPASS_CORE_SW_RESET 0x08
+#define EXYNOS7420_LPASS_UART_NORMAL BIT(10)
+#define EXYNOS7420_LPASS_INTR_CPU_MASK 0x58
+#define EXYNOS7420_LPASS_INTR_UART BIT(1)
+
 struct s3c24xx_uart_port {
 	unsigned char			rx_enabled;
 	unsigned char			tx_enabled;
@@ -152,6 +161,9 @@ struct s3c24xx_uart_port {
 	const struct s3c2410_uartcfg	*cfg;
 
 	struct s3c24xx_uart_dma		*dma;
+	struct regmap *lpass;
+	u32 lpass_irq_saved;
+	bool lpass_irq_active;
 };
 
 static void s3c24xx_serial_tx_chars(struct s3c24xx_uart_port *ourport);
@@ -1159,6 +1171,65 @@ static void s3c24xx_serial_release_dma(struct s3c24xx_uart_port *p)
 	}
 }
 
+/* Only an explicit Exynos7420 AUD UART phandle enables this path. */
+static void s3c24xx_serial_lpass_restore(struct s3c24xx_uart_port *ourport)
+{
+	int ret;
+
+	if (!ourport->lpass_irq_active)
+		return;
+
+	ret = regmap_update_bits(ourport->lpass, EXYNOS7420_LPASS_INTR_CPU_MASK,
+				 EXYNOS7420_LPASS_INTR_UART,
+				 ourport->lpass_irq_saved);
+	if (ret)
+		dev_warn(ourport->port.dev,
+			 "LPASS UART IRQ restore failed: %d\n", ret);
+	ourport->lpass_irq_active = false;
+}
+
+static int s3c24xx_serial_lpass_enable(struct s3c24xx_uart_port *ourport)
+{
+	u32 reset, before, after;
+	int ret;
+
+	if (!ourport->lpass)
+		return 0;
+
+	ret = regmap_read(ourport->lpass, EXYNOS7420_LPASS_CORE_SW_RESET,
+			  &reset);
+	if (ret)
+		return ret;
+	/* Do not force reset, power domains or PLL state in this experiment. */
+	if (!(reset & EXYNOS7420_LPASS_UART_NORMAL)) {
+		dev_err(ourport->port.dev, "LPASS UART held in reset (%#x)\n",
+			reset);
+		return -ENODEV;
+	}
+
+	ret = regmap_read(ourport->lpass, EXYNOS7420_LPASS_INTR_CPU_MASK,
+			  &before);
+	if (ret)
+		return ret;
+	ourport->lpass_irq_saved = before & EXYNOS7420_LPASS_INTR_UART;
+	ret = regmap_update_bits(ourport->lpass, EXYNOS7420_LPASS_INTR_CPU_MASK,
+				 EXYNOS7420_LPASS_INTR_UART,
+				 EXYNOS7420_LPASS_INTR_UART);
+	if (ret)
+		return ret;
+	ourport->lpass_irq_active = true;
+	ret = regmap_read(ourport->lpass, EXYNOS7420_LPASS_INTR_CPU_MASK,
+			  &after);
+	if (ret || !(after & EXYNOS7420_LPASS_INTR_UART)) {
+		s3c24xx_serial_lpass_restore(ourport);
+		return ret ? ret : -EIO;
+	}
+	dev_dbg(ourport->port.dev,
+		"LPASS UART reset=%#x CPU IRQ mask=%#x->%#x\n", reset, before,
+		after);
+	return 0;
+}
+
 static void s3c64xx_serial_shutdown(struct uart_port *port)
 {
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
@@ -1176,6 +1247,7 @@ static void s3c64xx_serial_shutdown(struct uart_port *port)
 		s3c24xx_serial_release_dma(ourport);
 
 	ourport->tx_in_progress = 0;
+	s3c24xx_serial_lpass_restore(ourport);
 }
 
 static void apple_s5l_serial_shutdown(struct uart_port *port)
@@ -1213,6 +1285,9 @@ static int s3c64xx_serial_startup(struct uart_port *port)
 	int ret;
 
 	wr_regl(port, S3C64XX_UINTM, 0xf);
+	ret = s3c24xx_serial_lpass_enable(ourport);
+	if (ret)
+		return ret;
 	if (ourport->dma) {
 		ret = s3c24xx_serial_request_dma(ourport);
 		if (ret < 0) {
@@ -1225,6 +1300,7 @@ static int s3c64xx_serial_startup(struct uart_port *port)
 			  s3c24xx_serial_portname(port), ourport);
 	if (ret) {
 		dev_err(port->dev, "cannot get irq %d\n", port->irq);
+		s3c24xx_serial_lpass_restore(ourport);
 		return ret;
 	}
 
@@ -1320,7 +1396,8 @@ static void s3c24xx_serial_pm(struct uart_port *port, unsigned int level,
 	}
 }
 
-/* baud rate calculation
+/*
+ * baud rate calculation
  *
  * The UARTs on the S3C2410/S3C2440 can take their clocks from a number
  * of different sources, including the peripheral clock ("pclk") and an
@@ -1436,7 +1513,8 @@ static unsigned int s3c24xx_serial_getclk(struct s3c24xx_uart_port *ourport,
 	return best_quot;
 }
 
-/* udivslot_table[]
+/*
+ * udivslot_table[]
  *
  * This table takes the fractional value of the baud divisor and gives
  * the recommended setting for the UDIVSLOT register.
@@ -1739,7 +1817,8 @@ static void s3c24xx_serial_init_port_default(int index)
 	port->line = index;
 }
 
-/* s3c24xx_serial_resetport
+/*
+ * s3c24xx_serial_resetport
  *
  * reset the fifos and other the settings.
  */
@@ -1796,7 +1875,8 @@ static int s3c24xx_serial_enable_baudclk(struct s3c24xx_uart_port *ourport)
 	return -EINVAL;
 }
 
-/* s3c24xx_serial_init_port
+/*
+ * s3c24xx_serial_init_port
  *
  * initialise a single serial port from the platform device given
  */
@@ -2015,6 +2095,18 @@ static int s3c24xx_serial_probe(struct platform_device *pdev)
 	 */
 	ourport->min_dma_size = max_t(int, ourport->port.fifosize,
 				    dma_get_cache_alignment());
+
+	/* LPASS is shared: use syscon and update only the UART routing bit. */
+	if (np && of_property_present(np, "samsung,lpass-syscon")) {
+		if (!of_device_is_compatible(np, "samsung,exynos7420-uart"))
+			return -EINVAL;
+		ourport->lpass = syscon_regmap_lookup_by_phandle(
+			np, "samsung,lpass-syscon");
+		if (IS_ERR(ourport->lpass))
+			return dev_err_probe(&pdev->dev,
+					     PTR_ERR(ourport->lpass),
+					     "LPASS syscon unavailable\n");
+	}
 
 	dev_dbg(&pdev->dev, "%s: initialising port %p...\n", __func__, ourport);
 

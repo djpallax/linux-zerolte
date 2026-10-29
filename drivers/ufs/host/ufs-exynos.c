@@ -1120,7 +1120,10 @@ static int exynos_ufs_setup_clocks(struct ufs_hba *hba, bool on,
 		if (ufs->opts & EXYNOS_UFS_OPT_BROKEN_AUTO_CLK_CTRL)
 			exynos_ufs_disable_auto_ctrl_hcc(ufs);
 		exynos_ufs_ungate_clks(ufs);
-	} else if (!on && status == POST_CHANGE) {
+	} else if (!on && status == ((ufs->opts &
+				      EXYNOS_UFS_OPT_GATE_BEFORE_CORE_OFF) ?
+					     PRE_CHANGE :
+					     POST_CHANGE)) {
 		exynos_ufs_gate_clks(ufs);
 		if (ufs->opts & EXYNOS_UFS_OPT_BROKEN_AUTO_CLK_CTRL)
 			exynos_ufs_enable_auto_ctrl_hcc(ufs);
@@ -2223,6 +2226,28 @@ static const struct exynos_ufs_drv_data exynos_ufs_drvs = {
 	.post_pwr_change	= exynos7_ufs_post_pwr_change,
 };
 
+/* Exynos7420 firmware owns UFSPR; direct access can raise SError. */
+static const struct exynos_ufs_drv_data exynos7420_ufs_drvs = {
+	.uic_attr = &exynos7_uic_attr,
+	.quirks = UFSHCD_QUIRK_PRDT_BYTE_GRAN |
+		  UFSHCI_QUIRK_BROKEN_REQ_LIST_CLR | UFSHCI_QUIRK_BROKEN_HCE |
+		  UFSHCI_QUIRK_SKIP_RESET_INTR_AGGR |
+		  UFSHCD_QUIRK_BROKEN_OCS_FATAL_ERROR |
+		  UFSHCI_QUIRK_SKIP_MANUAL_WB_FLUSH_CTRL |
+		  UFSHCD_QUIRK_SKIP_DEF_UNIPRO_TIMEOUT_SETTING,
+	.opts = EXYNOS_UFS_OPT_HAS_APB_CLK_CTRL |
+		EXYNOS_UFS_OPT_BROKEN_AUTO_CLK_CTRL |
+		EXYNOS_UFS_OPT_BROKEN_RX_SEL_IDX |
+		EXYNOS_UFS_OPT_SKIP_CONNECTION_ESTAB |
+		EXYNOS_UFS_OPT_USE_SW_HIBERN8_TIMER |
+		EXYNOS_UFS_OPT_UFSPR_SECURE |
+		EXYNOS_UFS_OPT_GATE_BEFORE_CORE_OFF,
+	.pre_link = exynos7_ufs_pre_link,
+	.post_link = exynos7_ufs_post_link,
+	.pre_pwr_change = exynos7_ufs_pre_pwr_change,
+	.post_pwr_change = exynos7_ufs_post_pwr_change,
+};
+
 static struct exynos_ufs_uic_attr gs101_uic_attr = {
 	.tx_trailingclks		= 0xff,
 	.pa_dbg_opt_suite1_val		= 0x90913C1C,
@@ -2310,10 +2335,10 @@ static const struct exynos_ufs_drv_data exynosautov920_ufs_drvs = {
 };
 
 static const struct of_device_id exynos_ufs_of_match[] = {
-	{ .compatible = "google,gs101-ufs",
-	  .data	      = &gs101_ufs_drvs },
-	{ .compatible = "samsung,exynos7-ufs",
-	  .data	      = &exynos_ufs_drvs },
+	{ .compatible = "samsung,exynos7420-ufs",
+	  .data = &exynos7420_ufs_drvs },
+	{ .compatible = "google,gs101-ufs", .data = &gs101_ufs_drvs },
+	{ .compatible = "samsung,exynos7-ufs", .data = &exynos_ufs_drvs },
 	{ .compatible = "samsung,exynosautov9-ufs",
 	  .data	      = &exynosauto_ufs_drvs },
 	{ .compatible = "samsung,exynosautov9-ufs-vh",

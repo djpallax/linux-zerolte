@@ -13,3 +13,5 @@ panfrost-y := \
 	panfrost_dump.o
 
 obj-$(CONFIG_DRM_PANFROST) += panfrost.o
+
+obj-$(CONFIG_S6_G3D_PILOT) += s6-g3d-pilot.o

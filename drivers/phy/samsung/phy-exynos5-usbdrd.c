@@ -940,6 +940,34 @@ static int exynos5_usbdrd_phy_init(struct phy *phy)
 	reg &= ~PHYCLKRST_PORTRESET;
 	writel(reg, phy_drd->reg_phy + EXYNOS5_DRD_PHYCLKRST);
 
+	/*
+	 * Galaxy S6 Edge opt-in USB2 VBUS-valid override.
+	 * Reapply after UTMI and PIPE3 init since both reset LINKSYSTEM.
+	 * Other Exynos models remain unaffected.
+	 * Experimental: forcing VBUS valid can keep the gadget logically attached
+	 * without a cable. Do not use this as an upstream generic fix.
+	 */
+	if (of_device_is_compatible(phy_drd->dev->of_node,
+				    "samsung,exynos7-usbdrd-phy") &&
+	    of_property_read_bool(phy_drd->dev->of_node,
+				  "samsung,g925i-force-vbus-valid")) {
+		u32 before_link, before_utmi, after_link, after_utmi;
+
+		before_link = readl(phy_drd->reg_phy + EXYNOS5_DRD_LINKSYSTEM);
+		before_utmi = readl(phy_drd->reg_phy + EXYNOS5_DRD_PHYUTMI);
+		writel(before_link | LINKSYSTEM_FORCE_BVALID |
+			       LINKSYSTEM_FORCE_VBUSVALID,
+		       phy_drd->reg_phy + EXYNOS5_DRD_LINKSYSTEM);
+		writel(before_utmi | PHYUTMI_VBUSVLDEXTSEL | PHYUTMI_VBUSVLDEXT,
+		       phy_drd->reg_phy + EXYNOS5_DRD_PHYUTMI);
+		after_link = readl(phy_drd->reg_phy + EXYNOS5_DRD_LINKSYSTEM);
+		after_utmi = readl(phy_drd->reg_phy + EXYNOS5_DRD_PHYUTMI);
+		dev_dbg(phy_drd->dev,
+			"VBUS-valid override phy=%u LINKSYSTEM %08x->%08x PHYUTMI %08x->%08x\n",
+			inst->phy_cfg->id, before_link, after_link, before_utmi,
+			after_utmi);
+	}
+
 	clk_bulk_disable_unprepare(phy_drd->drv_data->n_clks, phy_drd->clks);
 
 	return 0;

@@ -1187,3 +1187,13 @@ config MACSMC_POWER
 	  Say Y or M here if you have an Apple Silicon based Mac.
 
 endif # POWER_SUPPLY
+
+config BATTERY_S6_MAX77843_RO
+	bool "SM-G925I MAX77843 read-only bring-up telemetry"
+	depends on POWER_SUPPLY && MFD_MAX77843 && I2C && OF
+	select REGMAP_I2C
+	help
+	  Read battery and charger telemetry on the Samsung Galaxy S6 Edge.
+	  Temperatures use the Exynos ADC and board-specific thermistor tables.
+	  This driver does not configure charging, interrupt masks or the
+	  fuel-gauge model, and preserves the firmware initialization.

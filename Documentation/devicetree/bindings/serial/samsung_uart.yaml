@@ -35,6 +35,7 @@ properties:
       - items:
           - enum:
               - samsung,exynos7-uart
+              - samsung,exynos7420-uart
               - tesla,fsd-uart
           - const: samsung,exynos4210-uart
       - items:
@@ -87,6 +88,13 @@ properties:
 
   power-domains:
     maxItems: 1
+
+  samsung,lpass-syscon:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: |
+      Experimental Exynos7420 AUD UART routing through the LPASS system
+      registers. Only LPASS_INTR_CPU_MASK bit 1 is modified; its original
+      value is restored on UART close. UART reset must already be released.
 
   samsung,uart-fifosize:
     description: The fifo size supported by the UART channel.
