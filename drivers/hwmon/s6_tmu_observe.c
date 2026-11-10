@@ -2,7 +2,7 @@
 /*
  * Zerolte TMU monitoring using Samsung cal_tmu7420 calibration, with no TMU writes.
  * Requires firmware-initialized converters; invalid sensors fail closed.
- * Applies CPU frequency limits and core parking at the passive thermal trip,
+ * Limits CPU frequency before the passive trip parks secondary cores,
  * and requests recovery at the critical trip.
  */
 #include <linux/bits.h>
@@ -30,6 +30,14 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 
+#define S6_FREQ_LIMIT_TEMP 55000
+#define S6_WARM_TEMP 60000
+#define S6_PARK_TEMP 70000
+#define S6_CRITICAL_TEMP 85000
+#define S6_THERMAL_HYST 5000
+#define S6_FREQ_LIMIT_KHZ 500000
+#define S6_WARM_LIMIT_KHZ 400000
+
 struct s6_tmu {
 	void __iomem *base[4];
 	u32 calibration[4];
@@ -42,6 +50,7 @@ struct s6_tmu {
 	struct thermal_cooling_device *cooling;
 	struct delayed_work guard;
 	struct work_struct park_work;
+	cpumask_t parked_cpus;
 	bool cooling_latched, stopping, sensor_fault;
 	atomic_t recovery_requested;
 };
@@ -284,6 +293,8 @@ static void s6_park_work(struct work_struct *work)
 			if (cpu == 1 && !READ_ONCE(d->sensor_fault))
 				continue;
 			r = remove_cpu(cpu);
+			if (!r)
+				cpumask_set_cpu(cpu, &d->parked_cpus);
 			dev_warn(d->dev, "thermal park CPU%d rc=%d\n", cpu, r);
 		}
 	mutex_unlock(&d->cooling_lock);
@@ -301,7 +312,6 @@ static int s6_cooling_set(struct thermal_cooling_device *c, unsigned long state)
 	/* The actuator runs on CPU0 so it can never offline its own worker. */
 	if (state)
 		queue_work_on(0, system_percpu_wq, &d->park_work);
-	/* Relaxing cooling never automatically onlines an unvalidated core. */
 	return 0;
 }
 
@@ -394,11 +404,11 @@ static const struct thermal_zone_device_ops s6_zone_ops = {
 };
 
 static const struct thermal_trip s6_trips[] = {
-	{ .temperature = 55000,
-	  .hysteresis = 5000,
+	{ .temperature = S6_PARK_TEMP,
+	  .hysteresis = S6_THERMAL_HYST,
 	  .type = THERMAL_TRIP_PASSIVE },
-	{ .temperature = 85000,
-	  .hysteresis = 5000,
+	{ .temperature = S6_CRITICAL_TEMP,
+	  .hysteresis = S6_THERMAL_HYST,
 	  .type = THERMAL_TRIP_CRITICAL }
 };
 
@@ -410,50 +420,68 @@ static void s6_zone_unregister(void *arg)
 	thermal_zone_device_unregister(arg);
 }
 
+/* Restore only CPUs that were online before this driver parked them. */
+static void s6_restore_cpu(struct s6_tmu *d)
+{
+	int cpu, ret;
+
+	mutex_lock(&d->cooling_lock);
+	cpu = cpumask_first(&d->parked_cpus);
+	if (!d->cooling_latched && cpu < nr_cpu_ids) {
+		ret = cpu_online(cpu) ? 0 : add_cpu(cpu);
+		if (!ret)
+			cpumask_clear_cpu(cpu, &d->parked_cpus);
+		else
+			dev_warn_ratelimited(d->dev, "thermal restore CPU%d rc=%d\n",
+					     cpu, ret);
+	}
+	mutex_unlock(&d->cooling_lock);
+}
+
 static void s6_guard_work(struct work_struct *work)
 {
 	struct s6_tmu *d =
 		container_of(to_delayed_work(work), struct s6_tmu, guard);
-	int ret, temp;
+	int ret, temp, i;
 
 	if (system_state == SYSTEM_RUNNING) {
 		ret = thermal_zone_get_temp(d->zone, &temp);
 		WRITE_ONCE(d->sensor_fault, ret != 0);
-		{
-			int i;
-
-			for (i = 0; i < 2; i++) {
-				if (!d->policy[i]) {
-					d->policy[i] = cpufreq_cpu_get(i);
-					if (d->policy[i] &&
-					    freq_qos_add_request(
-						    &d->policy[i]->constraints,
-						    &d->maxfreq[i],
-						    FREQ_QOS_MAX,
-						    FREQ_QOS_MAX_DEFAULT_VALUE) <
-						    0) {
-						cpufreq_cpu_put(d->policy[i]);
-						d->policy[i] = NULL;
-					}
+		for (i = 0; i < ARRAY_SIZE(d->policy); i++) {
+			if (!d->policy[i]) {
+				d->policy[i] = cpufreq_cpu_get(i);
+				if (!d->policy[i])
+					continue;
+				if (freq_qos_add_request(&d->policy[i]->constraints,
+							 &d->maxfreq[i], FREQ_QOS_MAX,
+							 FREQ_QOS_MAX_DEFAULT_VALUE) < 0) {
+					cpufreq_cpu_put(d->policy[i]);
+					d->policy[i] = NULL;
+					continue;
 				}
-				if (d->policy[i] && (ret || temp >= 55000))
-					freq_qos_update_request(&d->maxfreq[i],
-								500000);
-				else if (d->policy[i] && temp <= 50000)
-					freq_qos_update_request(
-						&d->maxfreq[i],
-						FREQ_QOS_MAX_DEFAULT_VALUE);
 			}
+
+			if (ret || temp >= S6_WARM_TEMP)
+				freq_qos_update_request(&d->maxfreq[i],
+							S6_WARM_LIMIT_KHZ);
+			else if (temp >= S6_FREQ_LIMIT_TEMP)
+				freq_qos_update_request(&d->maxfreq[i],
+							S6_FREQ_LIMIT_KHZ);
+			else if (temp <= S6_FREQ_LIMIT_TEMP - S6_THERMAL_HYST)
+				freq_qos_update_request(&d->maxfreq[i],
+							FREQ_QOS_MAX_DEFAULT_VALUE);
 		}
-		if (ret || temp >= 55000) {
+
+		if (ret || temp >= S6_PARK_TEMP) {
 			s6_cooling_set(d->cooling, 1);
 			if (ret)
-				dev_warn_ratelimited(
-					d->dev,
-					"invalid TMU; secondary CPUs parked\n");
-		} else if (temp <= 50000)
+				dev_warn_ratelimited(d->dev,
+						     "invalid TMU; secondary CPUs parked\n");
+		} else if (temp <= S6_PARK_TEMP - S6_THERMAL_HYST) {
 			s6_cooling_set(d->cooling, 0);
-		if (!ret && temp >= 85000)
+			s6_restore_cpu(d);
+		}
+		if (!ret && temp >= S6_CRITICAL_TEMP)
 			s6_critical(d->zone);
 	}
 	if (!READ_ONCE(d->stopping))
@@ -555,7 +583,7 @@ static int s6_tmu_probe(struct platform_device *pdev)
 	ret = devm_add_action_or_reset(dev, s6_guard_stop, d);
 	if (ret)
 		return ret;
-	schedule_delayed_work_on(0, &d->guard, 15 * HZ);
+	schedule_delayed_work_on(0, &d->guard, HZ);
 	return 0;
 }
 
